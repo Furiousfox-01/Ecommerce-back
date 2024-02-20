@@ -3,19 +3,20 @@ const mysql = require("mysql2");
 const path = require("path");
 const pluralize = require("pluralize");
 const cors = require("cors");
+const solrClient = require("solr-client");
 
 const app = express();
 app.use(cors({ origin: "*" }));
-
-const BASE_URL = "http://localhost:8983/solr/product";
+const SOLR_URL = process.env.SOLR_URL || "http://solr:8983/solr";
+const BASE_URL = `${SOLR_URL}product`;
 const PORT = 3000;
 const ITEMS_PER_PAGE = 5;
 
 const connection = mysql.createConnection({
-  host: "localhost",
-  user: "madhu",
-  password: "password",
-  database: "ecommerce",
+  host: "sql6.freesqldatabase.com",
+  user: "sql6685139",
+  password: "aJsGzE9eIr",
+  database: "sql6685139",
 });
 
 connection.connect((err) => {
@@ -27,14 +28,57 @@ connection.connect((err) => {
 });
 
 function singularizeWord(word) {
-  console.log("pluralizing:", word);
   const words = word.split(/\s+/);
   const singularizedWords = words.map((word) => pluralize.singular(word));
   const singularizedString = singularizedWords.join(" ");
   return singularizedString;
 }
 
+const solrClients = solrClient.createClient({
+  host: "solr",
+  port: "8983",
+  core: "product",
+  protocol: "http",
+}
+);
+
+
+async function indexData(data) {
+  try {
+    console.log(data);
+    let response = await solrClients.add(data);
+
+  } catch (error) {
+    console.error("Error indexing data: ", error);
+  }
+}
+
+
+connection.query("SELECT * FROM product", async (err, results) => {
+  if (err) {
+    console.error("Error executing MySQL query: " + err.stack);
+    return;
+  }
+
+  for (const product of results) {
+    try {
+      const document = {
+        id: product.product_id,
+        brand: product.brand,
+        product_name: product.product_name,
+        category_name: product.category_name,
+        price: product.price,
+      };
+      await indexData(document);
+    } catch (error) {
+      console.error("Error indexing document:", error);
+    }
+  }
+});
+
+
 app.get("/api/search", async (req, res) => {
+  console.log("hello")
   try {
     let query = req.query.q;
     let less = ["under", "below", "less", "within", "down", "lesser", "in"];
@@ -67,7 +111,6 @@ app.get("/api/search", async (req, res) => {
     let data = query;
     let solrUrl = `${BASE_URL}/select?q=`;
 
-    console.log(data, query);
     for (let i = 0; i < less.length; i++) {
       const val = less[i];
       if (query.includes(val)) {
@@ -91,7 +134,7 @@ app.get("/api/search", async (req, res) => {
     if (query.includes("from") && query.includes("to")) {
       let betweenValues = query.split("from")[1].split("to");
       data = query.split("from")[0].trim();
-      console.log(data);
+      
       priceFilter = `fq=price:[${betweenValues[0]} TO ${betweenValues[1]}]`;
     }
 
@@ -134,8 +177,6 @@ app.get("/api/search", async (req, res) => {
       }`;
     }
 
-    // Add sorting
-    // solrUrl += `&sort=discounted_price desc, price asc`;
 
     if (priceFilter) {
       solrUrl += `&${priceFilter}`;
@@ -159,6 +200,8 @@ app.get("/api/search", async (req, res) => {
 });
 
 app.get("/categories", (req, res) => {
+  console.log("cate");
+
   connection.query("SELECT * FROM category", (err, results) => {
     if (err) {
       console.error("Error executing MySQL query: " + err.stack);
@@ -200,6 +243,8 @@ app.get("/products", (req, res) => {
 });
 
 app.get("/products/:categoryID", (req, res) => {
+  console.log("prod");
+
   const categoryID = req.params.categoryID;
   const page = parseInt(req.query.page) || 1;
   const offset = (page - 1) * ITEMS_PER_PAGE;
